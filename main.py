@@ -578,6 +578,15 @@ class TrafficApp:
             blur = cv2.GaussianBlur(frame, (5, 5), 0)
             fg   = self.fgbg.apply(blur)
             _, fg = cv2.threshold(fg, 127, 255, cv2.THRESH_BINARY)
+            
+        # Enforce exact cross-shape ROI masking to perfectly ignore grass/off-road sensor noise!
+        road_mask = np.zeros_like(fg)
+        x1, y1 = int(self.box_x1), int(self.box_y1)
+        x2, y2 = int(self.box_x2), int(self.box_y2)
+        cv2.rectangle(road_mask, (0, y1), (FRAME_W, y2), 255, -1)   # West-East corridor
+        cv2.rectangle(road_mask, (x1, 0), (x2, FRAME_H), 255, -1)   # North-South corridor
+        fg = cv2.bitwise_and(fg, road_mask)
+            
         fg = cv2.morphologyEx(fg, cv2.MORPH_OPEN,  KERNEL)
         fg = cv2.morphologyEx(fg, cv2.MORPH_CLOSE, KERNEL)
         return cv2.dilate(fg, KERNEL, iterations=2)
