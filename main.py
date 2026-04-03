@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import time
 import math
+import platform
 import tkinter as tk
 from PIL import Image, ImageTk
 import intersection_generator as inters5
@@ -170,7 +171,17 @@ class TrafficApp:
             history=500, varThreshold=40, detectShadows=True)
 
         if mode == "cam":
-            self.cap = cv2.VideoCapture(0)
+            if platform.system() == "Linux":
+                # Optimal backend for Raspberry Pi Camera modules
+                self.cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+            else:
+                self.cap = cv2.VideoCapture(0)
+
+            # Ensure resolution and framerate are explicitly locked for standard processing
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            self.cap.set(cv2.CAP_PROP_FPS, 30)
+
             if not self.cap.isOpened():
                 self._show_error("Camera not found.\nCheck that a webcam is connected.")
                 return
@@ -507,7 +518,7 @@ class TrafficApp:
         blur  = cv2.GaussianBlur(gray, (5, 5), 0)
         edges = cv2.Canny(blur, 50, 150)
         lines = cv2.HoughLinesP(edges, 1, np.pi / 180,
-                                 threshold=60, minLineLength=60, maxGap=20)
+                                 threshold=60, minLineLength=60, maxLineGap=20)
         overlay = frame.copy()
         if lines is not None:
             for ln in lines:
