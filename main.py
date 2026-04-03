@@ -31,13 +31,9 @@ LOW_THRESH    = 5
 MED_THRESH    = 15
 KERNEL        = np.ones((5, 5), np.uint8)
 
-# Intersection box (pixels in 640×480 frame)
-BOX_X1, BOX_Y1 = 255, 153
-BOX_X2, BOX_Y2 = 385, 327
-NORTH_GATE  = BOX_Y1          # y = 153
-SOUTH_GATE  = BOX_Y2          # y = 327
-WEST_GATE   = BOX_X1          # x = 255
-EAST_GATE   = BOX_X2          # x = 385
+# Default fallback intersection box parameters
+DEF_BOX_X1, DEF_BOX_Y1 = 255, 153
+DEF_BOX_X2, DEF_BOX_Y2 = 385, 327
 GATE_BAND   = 15
 
 
@@ -75,6 +71,12 @@ class TrafficApp:
         self.congestion = 0
         self.frame_num  = 0
         self.inters_sim = None
+        
+        # Dynamic Box Bounds (capable of lerping towards Hough lines)
+        self.box_x1 = DEF_BOX_X1
+        self.box_y1 = DEF_BOX_Y1
+        self.box_x2 = DEF_BOX_X2
+        self.box_y2 = DEF_BOX_Y2
 
     # ── Launcher screen ────────────────────────────────────────────────────────
     def _show_launcher(self):
@@ -408,43 +410,40 @@ class TrafficApp:
                 })
 
             obj = self.objects[mid]
-            px, py = obj["prev_centroid"]
+            # Check physical presence in bounding box
+            in_bounds = (self.box_x1 <= cx <= self.box_x2) and (self.box_y1 <= cy <= self.box_y2)
 
             if not obj["counted"]:
-                direction = None
-                # Southbound: car moves downward through top gate
-                if (py < NORTH_GATE - GATE_BAND and
-                        cy >= NORTH_GATE - GATE_BAND and
-                        BOX_X1 <= cx <= BOX_X2):
-                    direction = "S"
-                # Northbound: car moves upward through bottom gate
-                elif (py > SOUTH_GATE + GATE_BAND and
-                        cy <= SOUTH_GATE + GATE_BAND and
-                        BOX_X1 <= cx <= BOX_X2):
-                    direction = "N"
-                # Eastbound: car moves rightward through left gate
-                elif (px < WEST_GATE - GATE_BAND and
-                        cx >= WEST_GATE - GATE_BAND and
-                        BOX_Y1 <= cy <= BOX_Y2):
-                    direction = "E"
-                # Westbound: car moves leftward through right gate
-                elif (px > EAST_GATE + GATE_BAND and
-                        cx <= EAST_GATE + GATE_BAND and
-                        BOX_Y1 <= cy <= BOX_Y2):
-                    direction = "W"
+                if in_bounds:
+                    obj["in_box"] = True
+                elif obj.get("in_box", False):
+                    # It was in the box, but is out now -> It exited!
+                    direction = None
+                    # Exits Top -> Going North
+                    if cy < self.box_y1:
+                        direction = "N"
+                    # Exits Bottom -> Going South
+                    elif cy > self.box_y2:
+                        direction = "S"
+                    # Exits Left -> Going West
+                    elif cx < self.box_x1:
+                        direction = "W"
+                    # Exits Right -> Going East
+                    elif cx > self.box_x2:
+                        direction = "E"
 
-                if direction:
-                    obj["counted"]   = True
-                    obj["direction"] = direction
-                    self.count += 1
-                    if direction == "N":
-                        self.count_n += 1
-                    elif direction == "S":
-                        self.count_s += 1
-                    elif direction == "W":
-                        self.count_w += 1
-                    elif direction == "E":
-                        self.count_e += 1
+                    if direction:
+                        obj["counted"]   = True
+                        obj["direction"] = direction
+                        self.count += 1
+                        if direction == "N":
+                            self.count_n += 1
+                        elif direction == "S":
+                            self.count_s += 1
+                        elif direction == "W":
+                            self.count_w += 1
+                        elif direction == "E":
+                            self.count_e += 1
 
             col       = (0, 255, 0) if obj["counted"] else (0, 255, 255)
             dir_label = obj.get("direction") or ""
@@ -473,14 +472,16 @@ class TrafficApp:
         for oid in gone:
             del self.objects[oid]
 
-        # intersection box
-        cv2.rectangle(frame, (BOX_X1, BOX_Y1), (BOX_X2, BOX_Y2),
-                      (255, 255, 255), 2)
+        # dynamic intersection box
+        x1, y1 = int(self.box_x1), int(self.box_y1)
+        x2, y2 = int(self.box_x2), int(self.box_y2)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
+        
         # gate lines: N=red, S=yellow, W=magenta, E=cyan
-        cv2.line(frame, (BOX_X1, NORTH_GATE), (BOX_X2, NORTH_GATE), (0,   0,   255), 1)
-        cv2.line(frame, (BOX_X1, SOUTH_GATE), (BOX_X2, SOUTH_GATE), (255, 255,   0), 1)
-        cv2.line(frame, (WEST_GATE, BOX_Y1),  (WEST_GATE, BOX_Y2),  (255,   0, 255), 1)
-        cv2.line(frame, (EAST_GATE, BOX_Y1),  (EAST_GATE, BOX_Y2),  (  0, 255, 255), 1)
+        cv2.line(frame, (x1, y1), (x2, y1), (0,   0,   255), 1)
+        cv2.line(frame, (x1, y2), (x2, y2), (255, 255,   0), 1)
+        cv2.line(frame, (x1, y1), (x1, y2), (255,   0, 255), 1)
+        cv2.line(frame, (x2, y1), (x2, y2), (  0, 255, 255), 1)
 
         return frame
 
@@ -527,13 +528,37 @@ class TrafficApp:
         lines = cv2.HoughLinesP(edges, 1, np.pi / 180,
                                  threshold=50, minLineLength=40, maxLineGap=20)
         overlay = frame.copy()
+        valid_x = []
+        valid_y = []
+
         if lines is not None:
             for ln in lines:
                 x1, y1, x2, y2 = ln[0]
                 angle = abs(math.degrees(math.atan2(y2 - y1, x2 - x1)))
                 if angle <= 30 or angle >= 60:          # horizontal or vertical only
                     cv2.line(overlay, (x1, y1), (x2, y2), (255, 120, 0), 2)
+                
+                if angle >= 60:
+                    valid_x.extend([x1, x2])
+                elif angle <= 30:
+                    valid_y.extend([y1, y2])
+        
         cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+
+        # Fluid dynamic bounds tracking (Camera mode only)
+        if self.mode == "cam":
+            if valid_x:
+                lefts = [x for x in valid_x if x < FRAME_W / 2]
+                rights = [x for x in valid_x if x > FRAME_W / 2]
+                if lefts: self.box_x1 = int(0.9 * self.box_x1 + 0.1 * np.median(lefts))
+                if rights: self.box_x2 = int(0.9 * self.box_x2 + 0.1 * np.median(rights))
+            
+            if valid_y:
+                tops = [y for y in valid_y if y < FRAME_H / 2]
+                bottoms = [y for y in valid_y if y > FRAME_H / 2]
+                if tops: self.box_y1 = int(0.9 * self.box_y1 + 0.1 * np.median(tops))
+                if bottoms: self.box_y2 = int(0.9 * self.box_y2 + 0.1 * np.median(bottoms))
+
         return frame
 
     def _motion_mask(self, frame):
