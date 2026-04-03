@@ -1,6 +1,6 @@
 # MCU Traffic Counter
 
-A real-time vehicle detection and counting system built with Python and OpenCV. Features a dark-themed GUI with two modes: a scripted intersection simulation and live camera detection (designed for a Raspberry Pi camera pointed at an iPad).
+A real-time vehicle detection and counting system built with Python and OpenCV. Features a dark-themed GUI with two modes: a highly structured 4-Way Stop Intersection simulation and live camera detection.
 
 ## Requirements
 
@@ -18,15 +18,16 @@ A launcher window opens. Choose a mode:
 
 | Mode | Description |
 |------|-------------|
-| **Simulation** | Animated 4-way intersection with scripted cars — no hardware needed |
+| **Simulation** | Animated, strictly logical 4-way stop intersection — no hardware needed |
 | **Camera (iPad)** | Live camera feed with road-line detection overlay and vehicle counting |
 
 ## How It Works
 
-### Simulation Mode
-- Renders a top-down 4-way intersection using `intersection_generator.py`
-- Cars follow scripted paths (straight, left turn, right turn) across all 8 routes
-- Motion detection picks up moving cars via background subtraction
+### Simulation Mode (4-Way Stop & Go)
+- Renders a visually robust 4-way intersection (dark asphalt, white stop lines, yellow center dividers, and grass bounds) using `intersection_generator.py`
+- Operates on strict **4-Way Stop Sign Queueing**, abandoning phased traffic lights in favor of an intelligent FIFO-based geometric arbitration.
+- A **precomputed conflict matrix** evaluates intersecting Bezier curve paths to flawlessly direct the intersection. If routes clash, cars gracefully stop and queue up perfectly behind one another via active `dist` radar until their geometric path clears!
+- Motion detection picks up moving cars via background subtraction against the simulated environment.
 
 ### Camera Mode
 - Designed for a camera pointed at an iPad playing the intersection simulation
@@ -42,24 +43,24 @@ A launcher window opens. Choose a mode:
   - **E** (cyan line) — vehicle enters from the right
 - Each vehicle gets a unique ID and is counted only once
 
-### Severity
-Updates live based on total count:
-- 🟢 **Low** — fewer than 5
-- 🟡 **Medium** — 5–14
-- 🔴 **High** — 15+
+### Severity Level Tracker
+Updates dynamically based entirely on **waiting traffic congestion** queues rather than actively moving cars:
+- 🟢 **Low** — less than 2 cars waiting
+- 🟡 **Medium** — 2–3 cars waiting
+- 🔴 **High** — 4+ fully gridlocking the intersection
 
 ## Project Structure
 
 ```
 mcu-traffic-counter/
-├── main.py                    # GUI app — launcher, camera loop, detection, counting
-└── intersection_generator.py  # Generates the synthetic intersection animation frames
+├── main.py                    # GUI app — launcher, camera loop, detection, counting, congestion grading
+└── intersection_generator.py  # Geometric logic, queuing, Matrix paths, simulation rendering 
 ```
 
 ## Dependencies
 
 | Package | Purpose |
 |---------|---------|
-| `opencv-python` | Video capture, image processing, Hough lines, contour detection |
-| `numpy` | Frame and mask operations |
-| `Pillow` | Embedding OpenCV frames into the tkinter GUI |
+| `opencv-python` | Video capture, image processing, Hough lines, contour detection, drawing |
+| `numpy` | Frame background subtraction and mathematical matrix masking |
+| `Pillow` | Embedding OpenCV frames natively into the tkinter GUI |
