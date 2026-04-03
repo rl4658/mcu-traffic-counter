@@ -412,26 +412,26 @@ class TrafficApp:
 
             if not obj["counted"]:
                 direction = None
-                # North: car moves downward through top gate
+                # Southbound: car moves downward through top gate
                 if (py < NORTH_GATE - GATE_BAND and
                         cy >= NORTH_GATE - GATE_BAND and
                         BOX_X1 <= cx <= BOX_X2):
-                    direction = "N"
-                # South: car moves upward through bottom gate
+                    direction = "S"
+                # Northbound: car moves upward through bottom gate
                 elif (py > SOUTH_GATE + GATE_BAND and
                         cy <= SOUTH_GATE + GATE_BAND and
                         BOX_X1 <= cx <= BOX_X2):
-                    direction = "S"
-                # West: car moves rightward through left gate
+                    direction = "N"
+                # Eastbound: car moves rightward through left gate
                 elif (px < WEST_GATE - GATE_BAND and
                         cx >= WEST_GATE - GATE_BAND and
                         BOX_Y1 <= cy <= BOX_Y2):
-                    direction = "W"
-                # East: car moves leftward through right gate
+                    direction = "E"
+                # Westbound: car moves leftward through right gate
                 elif (px > EAST_GATE + GATE_BAND and
                         cx <= EAST_GATE + GATE_BAND and
                         BOX_Y1 <= cy <= BOX_Y2):
-                    direction = "E"
+                    direction = "W"
 
                 if direction:
                     obj["counted"]   = True
@@ -514,11 +514,18 @@ class TrafficApp:
 
     # ── Mask helpers ───────────────────────────────────────────────────────────
     def _line_overlay(self, frame):
-        gray  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # Best model for embedded CPUs: Color-isolated HoughLinesP
+        # Mask out only Yellow and White pixels to perfectly trace the iPad
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        mask_yellow = cv2.inRange(hsv, np.array([15, 80, 80]), np.array([35, 255, 255]))
+        mask_white  = cv2.inRange(hsv, np.array([0, 0, 200]),  np.array([180, 25, 255]))
+        masked_frame = cv2.bitwise_and(frame, frame, mask=cv2.bitwise_or(mask_white, mask_yellow))
+
+        gray  = cv2.cvtColor(masked_frame, cv2.COLOR_BGR2GRAY)
         blur  = cv2.GaussianBlur(gray, (5, 5), 0)
         edges = cv2.Canny(blur, 50, 150)
         lines = cv2.HoughLinesP(edges, 1, np.pi / 180,
-                                 threshold=60, minLineLength=60, maxLineGap=20)
+                                 threshold=50, minLineLength=40, maxLineGap=20)
         overlay = frame.copy()
         if lines is not None:
             for ln in lines:
