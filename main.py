@@ -371,7 +371,10 @@ class TrafficApp:
     # ── Detection & tracking ───────────────────────────────────────────────────
     def _process(self, frame):
         self.frame_num += 1
-        min_area = 600 if self.mode == "sim" else 1200
+        
+        # The iPad camera's distance causes nested cars to naturally compress visually down to ~150-200px.
+        # Dropped min_area for camera mode down drastically to ensure these nested vehicles pass the contour check!
+        min_area = 600 if self.mode == "sim" else 80
 
         if self.mode == "cam":
             frame = self._line_overlay(frame)
