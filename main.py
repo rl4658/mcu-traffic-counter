@@ -389,10 +389,12 @@ class TrafficApp:
         for obj in self.objects.values():
             obj["disappeared"] += 1
 
+        used_objs = set()
         for cx, cy, x, y, w, h in detections:
             mid = None
             best = float("inf")
             for oid, obj in self.objects.items():
+                if oid in used_objs: continue
                 d = math.hypot(cx - obj["centroid"][0], cy - obj["centroid"][1])
                 if d < MATCH_DIST and d < best:
                     best, mid = d, oid
@@ -408,16 +410,20 @@ class TrafficApp:
                     "age":           self.objects[mid].get("age", 0) + 1,
                     "last_seen":     time.time(),
                 })
+            used_objs.add(mid)
 
             obj = self.objects[mid]
-            # Check physical presence in bounding box
-            in_bounds = (self.box_x1 <= cx <= self.box_x2) and (self.box_y1 <= cy <= self.box_y2)
+            # Check physical presence in bounding box with a robust buffer margin
+            margin = 12
+            core_in_bounds = (self.box_x1 <= cx <= self.box_x2) and (self.box_y1 <= cy <= self.box_y2)
+            buffer_in_bounds = (self.box_x1 - margin <= cx <= self.box_x2 + margin) and \
+                               (self.box_y1 - margin <= cy <= self.box_y2 + margin)
 
             if not obj["counted"]:
-                if in_bounds:
+                if core_in_bounds:
                     obj["in_box"] = True
-                elif obj.get("in_box", False):
-                    # It was in the box, but is out now -> It exited!
+                elif obj.get("in_box", False) and not buffer_in_bounds:
+                    # Vehicle has definitively and cleanly exited the intersection boundaries
                     direction = None
                     # Exits Top -> Going North
                     if cy < self.box_y1:
@@ -516,11 +522,10 @@ class TrafficApp:
     # ── Mask helpers ───────────────────────────────────────────────────────────
     def _line_overlay(self, frame):
         # Best model for embedded CPUs: Color-isolated HoughLinesP
-        # Mask out only Yellow and White pixels to perfectly trace the iPad
+        # Mask out purely White pixels to flawlessly isolate the perimeter stop-lines exclusively!
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        mask_yellow = cv2.inRange(hsv, np.array([15, 80, 80]), np.array([35, 255, 255]))
-        mask_white  = cv2.inRange(hsv, np.array([0, 0, 200]),  np.array([180, 25, 255]))
-        masked_frame = cv2.bitwise_and(frame, frame, mask=cv2.bitwise_or(mask_white, mask_yellow))
+        mask_white  = cv2.inRange(hsv, np.array([0, 0, 200]),  np.array([180, 40, 255]))
+        masked_frame = cv2.bitwise_and(frame, frame, mask=mask_white)
 
         gray  = cv2.cvtColor(masked_frame, cv2.COLOR_BGR2GRAY)
         blur  = cv2.GaussianBlur(gray, (5, 5), 0)
