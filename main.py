@@ -169,8 +169,10 @@ class TrafficApp:
         self.mode = mode
         self._reset_state()
 
+        # Increase history to 2000 so queued stop-sign cars don't vanish into the background.
+        # Disable shadow detection for purely binary silhouettes. 
         self.fgbg = cv2.createBackgroundSubtractorMOG2(
-            history=500, varThreshold=40, detectShadows=True)
+            history=2000, varThreshold=16, detectShadows=False)
 
         if mode == "cam":
             if platform.system() == "Linux":
@@ -568,9 +570,11 @@ class TrafficApp:
             gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
             _, fg = cv2.threshold(gray, 20, 255, cv2.THRESH_BINARY)
         else:
-            gray = cv2.GaussianBlur(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (5, 5), 0)
-            fg   = self.fgbg.apply(gray)
-            _, fg = cv2.threshold(fg, 200, 255, cv2.THRESH_BINARY)
+            # Apply MOG2 on full BGR color-space rather than grayscale! 
+            # This allows it to detect vividly colored cars on roads that might have identical gray-luminance!
+            blur = cv2.GaussianBlur(frame, (5, 5), 0)
+            fg   = self.fgbg.apply(blur)
+            _, fg = cv2.threshold(fg, 127, 255, cv2.THRESH_BINARY)
         fg = cv2.morphologyEx(fg, cv2.MORPH_OPEN,  KERNEL)
         fg = cv2.morphologyEx(fg, cv2.MORPH_CLOSE, KERNEL)
         return cv2.dilate(fg, KERNEL, iterations=2)
