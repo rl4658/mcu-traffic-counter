@@ -1,0 +1,18 @@
+# Claude
+.claude/
+
+# Transcripts / notes
+*.txt
+
+# Generated video output
+*.mp4
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+
+# OS
+.DS_Store
+Thumbs.db
