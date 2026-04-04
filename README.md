@@ -5,11 +5,21 @@ A real-time vehicle detection and counting system built with Python and OpenCV. 
 ## Requirements
 
 - Python 3.8+
-- `pip install opencv-python numpy Pillow`
+- `pip install opencv-python numpy Pillow flask requests`
 - A webcam or Raspberry Pi camera (for Camera mode only)
 
 ## Running
 
+This application utilizes a decoupled client-server architecture to provide both the main GUI simulation and a live web dashboard.
+
+**1. Start the Backend Web Server**
+```bash
+python server.py
+```
+> The dashboard will be available at `http://127.0.0.1:5000`
+
+**2. Start the Client GUI**
+In a new terminal window, run:
 ```bash
 python main.py
 ```
@@ -49,11 +59,17 @@ Updates dynamically based entirely on **waiting vehicles** in the queues rather 
 - 🟡 **Medium** — 2–3 cars waiting
 - 🔴 **High** — 4+ fully gridlocking the intersection
 
+### Web Dashboard & IoT Reporting
+- A background thread polls the local `server.py` via HTTP `POST` every 60 seconds with payload data. 
+- The server records the traffic stat history without blocking the `main.py` client visual loops.
+- View the styled visual dashboard by navigating your local browser to the host machine's port `5000`.
+
 ## Project Structure
 
 ```
 mcu-traffic-counter/
-├── main.py                    # GUI app — launcher, camera loop, detection, counting, congestion grading
+├── main.py                    # GUI app — launcher, video loop, detection, counting, HTTP agent
+├── server.py                  # API Aggregator & dynamic HTML web dashboard server  
 └── intersection_generator.py  # Geometric logic, queuing, Matrix paths, simulation rendering 
 ```
 
@@ -64,3 +80,5 @@ mcu-traffic-counter/
 | `opencv-python` | Video capture, image processing, Hough lines, contour detection, drawing |
 | `numpy` | Frame background subtraction and mathematical matrix masking |
 | `Pillow` | Embedding OpenCV frames natively into the tkinter GUI |
+| `flask` | Aggregation API server and serving the live web dashboard template |
+| `requests` | Non-blocking synchronous HTTP reporting agent inside client threads |
