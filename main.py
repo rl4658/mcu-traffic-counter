@@ -192,7 +192,10 @@ class TrafficApp:
         else:
             self.inters_sim = inters5.IntersectionSimulator()
             # Precompute empty road for sim-mode detection (frame diff vs MOG2)
-            self._sim_bg = cv2.resize(inters5.draw_scene(), (FRAME_W, FRAME_H))
+            # Include stop signs in background so absdiff doesn't flag them as foreground
+            bg = inters5.draw_scene()
+            inters5.draw_stop_signs(bg)
+            self._sim_bg = cv2.resize(bg, (FRAME_W, FRAME_H))
 
         self._build_counter_ui()
         self.running = True
@@ -587,9 +590,13 @@ class TrafficApp:
         cv2.rectangle(road_mask, (x1, 0), (x2, FRAME_H), 255, -1)   # North-South corridor
         fg = cv2.bitwise_and(fg, road_mask)
             
-        fg = cv2.morphologyEx(fg, cv2.MORPH_OPEN,  KERNEL)
+        # Morphology: strong open to kill small noise (stop signs, flicker), gentle close + dilate
+        # to keep car outlines tight and prevent merging nearby vehicles
+        open_kernel = np.ones((7, 7), np.uint8)
+        fg = cv2.morphologyEx(fg, cv2.MORPH_OPEN, open_kernel)
         fg = cv2.morphologyEx(fg, cv2.MORPH_CLOSE, KERNEL)
-        return cv2.dilate(fg, KERNEL, iterations=2)
+        small_kernel = np.ones((3, 3), np.uint8)
+        return cv2.dilate(fg, small_kernel, iterations=1)
 
     # ── Tracker helpers ────────────────────────────────────────────────────────
     def _register(self, cx, cy):
