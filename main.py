@@ -3,7 +3,9 @@ import cv2
 import numpy as np
 import time
 import math
+import requests
 import platform
+import threading
 import tkinter as tk
 from PIL import Image, ImageTk
 import intersection_generator as inters5
@@ -77,6 +79,10 @@ class TrafficApp:
         self.box_y1 = DEF_BOX_Y1
         self.box_x2 = DEF_BOX_X2
         self.box_y2 = DEF_BOX_Y2
+
+        # Reporting
+        self.last_report_time = time.time()
+        self.report_interval = 60.0
 
     # ── Launcher screen ────────────────────────────────────────────────────────
     def _show_launcher(self):
@@ -361,6 +367,13 @@ class TrafficApp:
         self.video_lbl.configure(image=imgtk)
 
         self._update_sidebar()
+
+        # Send periodic HTTP reports to server.py
+        current_time = time.time()
+        if current_time - self.last_report_time >= self.report_interval:
+            self._send_periodic_report()
+            self.last_report_time = current_time
+
         self._after_id = self.root.after(30, self._loop)
 
     # ── Frame acquisition ──────────────────────────────────────────────────────
@@ -627,6 +640,36 @@ class TrafficApp:
     def _on_spawn_rate(self, val):
         if self.inters_sim:
             self.inters_sim._SPAWN_INTERVAL = int(val)
+
+    def _send_periodic_report(self):
+        sev = "Low"
+        if self.congestion >= 4:
+            sev = "High"
+        elif self.congestion >= 2:
+            sev = "Medium"
+
+        payload = {
+            "device_id": f"c920cam_{self.mode}",
+            "event": "periodic_report",
+            "total_count": self.count,
+            "north": self.count_n,
+            "south": self.count_s,
+            "west": self.count_w,
+            "east": self.count_e,
+            "congestion": self.congestion,
+            "severity": sev,
+            "timestamp": time.time()
+        }
+        print("POST 1-MIN REPORT:", payload)
+
+        def post_task():
+            try:
+                r = requests.post("http://127.0.0.1:5000/traffic", json=payload, timeout=2)
+                print("SERVER RESP:", r.status_code, r.text)
+            except Exception as e:
+                print("HTTP post failed:", e)
+
+        threading.Thread(target=post_task, daemon=True).start()
 
     # ── Navigation ────────────────────────────────────────────────────────────
     def _stop(self):
