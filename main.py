@@ -497,6 +497,9 @@ class TrafficApp:
                             self.count_w += 1
                         elif direction == "E":
                             self.count_e += 1
+                        
+                        # Terminate immediately post-count to prevent phantom counting of coasting ghosts
+                        obj["disappeared"] = 9999
 
             # 7. Visualization
             if obj["disappeared"] <= 2:
