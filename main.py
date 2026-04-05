@@ -3,9 +3,7 @@ import cv2
 import numpy as np
 import time
 import math
-import requests
 import platform
-import threading
 import tkinter as tk
 from PIL import Image, ImageTk
 import intersection_generator as inters5
@@ -27,7 +25,7 @@ SEV_RED    = "#e74c3c"
 FRAME_W       = 640
 FRAME_H       = 480
 SIDEBAR_W     = 260
-MAX_GONE      = 60
+MAX_GONE      = 12
 MATCH_DIST    = 60
 LOW_THRESH    = 5
 MED_THRESH    = 15
@@ -79,10 +77,6 @@ class TrafficApp:
         self.box_y1 = DEF_BOX_Y1
         self.box_x2 = DEF_BOX_X2
         self.box_y2 = DEF_BOX_Y2
-
-        # Reporting
-        self.last_report_time = time.time()
-        self.report_interval = 60.0
 
     # ── Launcher screen ────────────────────────────────────────────────────────
     def _show_launcher(self):
@@ -175,9 +169,10 @@ class TrafficApp:
         self.mode = mode
         self._reset_state()
 
-        # Lower history to 90 (3 sec) to rapidly erase MOG2 ghost "burn-in" holes.
+        # Increase history to 2000 so queued stop-sign cars don't vanish into the background.
+        # Disable shadow detection for purely binary silhouettes. 
         self.fgbg = cv2.createBackgroundSubtractorMOG2(
-            history=90, varThreshold=16, detectShadows=False)
+            history=2000, varThreshold=16, detectShadows=False)
 
         if mode == "cam":
             if platform.system() == "Linux":
@@ -361,13 +356,6 @@ class TrafficApp:
         self.video_lbl.configure(image=imgtk)
 
         self._update_sidebar()
-        
-        # Send periodic HTTP reports
-        current_time = time.time()
-        if current_time - self.last_report_time >= self.report_interval:
-            self._send_periodic_report()
-            self.last_report_time = current_time
-
         self._after_id = self.root.after(30, self._loop)
 
     # ── Frame acquisition ──────────────────────────────────────────────────────
@@ -386,13 +374,10 @@ class TrafficApp:
         
         # The iPad camera's distance causes nested cars to naturally compress visually down to ~150-200px.
         # Dropped min_area for camera mode down drastically to ensure these nested vehicles pass the contour check!
-        min_area = 600 if self.mode == "sim" else 50
+        min_area = 600 if self.mode == "sim" else 80
 
         if self.mode == "cam":
-            # Throttle heavy HoughLines tracking to save CPU on Pi (3 Hz is plenty for static camera)
-            if self.frame_num % 10 == 1:
-                bg = self.fgbg.getBackgroundImage()
-                self._line_overlay(bg if bg is not None else frame)
+            frame = self._line_overlay(frame)
 
         mask = self._motion_mask(frame)
 
@@ -405,67 +390,36 @@ class TrafficApp:
             x, y, w, h = cv2.boundingRect(cnt)
             detections.append((x + w // 2, y + h // 2, x, y, w, h))
 
-        # 1. Predict next centroids using constant velocity (for all objects)
+        # age every existing object
         for obj in self.objects.values():
-            vx = obj["centroid"][0] - obj["prev_centroid"][0]
-            vy = obj["centroid"][1] - obj["prev_centroid"][1]
-            obj["predicted_centroid"] = (obj["centroid"][0] + vx, obj["centroid"][1] + vy)
+            obj["disappeared"] += 1
 
-        # 2. Match detections to objects based on PREDICTED positions
-        matches = []
-        margin = 12
-        for d_idx, (cx, cy, x, y, w, h) in enumerate(detections):
-            # Is this active visual contour physically inside the intersection zone?
-            det_in_buffer = (self.box_x1 - margin <= cx <= self.box_x2 + margin) and \
-                            (self.box_y1 - margin <= cy <= self.box_y2 + margin)
-                            
+        used_objs = set()
+        for cx, cy, x, y, w, h in detections:
+            mid = None
+            best = float("inf")
             for oid, obj in self.objects.items():
-                # BUGFIX: Prevent trailing cars from stealing an exited (Green) car's ID 
-                if obj["counted"] and det_in_buffer:
-                    continue
-                    
-                px, py = obj["predicted_centroid"]
-                d = math.hypot(cx - px, cy - py)
-                matches.append((d, d_idx, oid))
-                
-        matches.sort(key=lambda x: x[0])
-        used_det = set()
-        used_obj = set()
-        
-        # 3. Apply matches
-        for d, d_idx, oid in matches:
-            if d > MATCH_DIST:
-                continue
-            if d_idx not in used_det and oid not in used_obj:
-                used_det.add(d_idx)
-                used_obj.add(oid)
-                # Update matched object
-                cx, cy, x, y, w, h = detections[d_idx]
-                obj = self.objects[oid]
-                obj["prev_centroid"] = obj["centroid"]
-                obj["centroid"]      = (cx, cy)
-                obj["size"]          = (w, h)
-                obj["disappeared"]   = 0
-                obj["age"]           += 1
-                obj["last_seen"]     = time.time()
-                
-        # 4. Handle unmatched detections (New objects)
-        for d_idx, (cx, cy, x, y, w, h) in enumerate(detections):
-            if d_idx not in used_det:
-                self._register(cx, cy, w, h)
-                
-        # 5. Handle unmatched objects (Coasting/Disappearing)
-        for oid, obj in self.objects.items():
-            if oid not in used_obj:
-                obj["disappeared"] += 1
-                obj["prev_centroid"] = obj["centroid"]
-                obj["centroid"] = obj["predicted_centroid"]
+                if oid in used_objs: continue
+                d = math.hypot(cx - obj["centroid"][0], cy - obj["centroid"][1])
+                if d < MATCH_DIST and d < best:
+                    best, mid = d, oid
 
-        # 6. Check counting logic (Using a robust bounding box & buffer)
-        margin = 12
-        for mid, obj in self.objects.items():
-            cx, cy = obj["centroid"]
-            
+            if mid is None:
+                self._register(cx, cy)
+                mid = self.next_id - 1
+            else:
+                self.objects[mid].update({
+                    "prev_centroid": self.objects[mid]["centroid"],
+                    "centroid":      (cx, cy),
+                    "disappeared":   0,
+                    "age":           self.objects[mid].get("age", 0) + 1,
+                    "last_seen":     time.time(),
+                })
+            used_objs.add(mid)
+
+            obj = self.objects[mid]
+            # Check physical presence in bounding box with a robust buffer margin
+            margin = 12
             core_in_bounds = (self.box_x1 <= cx <= self.box_x2) and (self.box_y1 <= cy <= self.box_y2)
             buffer_in_bounds = (self.box_x1 - margin <= cx <= self.box_x2 + margin) and \
                                (self.box_y1 - margin <= cy <= self.box_y2 + margin)
@@ -476,12 +430,16 @@ class TrafficApp:
                 elif obj.get("in_box", False) and not buffer_in_bounds:
                     # Vehicle has definitively and cleanly exited the intersection boundaries
                     direction = None
+                    # Exits Top -> Going North
                     if cy < self.box_y1:
                         direction = "N"
+                    # Exits Bottom -> Going South
                     elif cy > self.box_y2:
                         direction = "S"
+                    # Exits Left -> Going West
                     elif cx < self.box_x1:
                         direction = "W"
+                    # Exits Right -> Going East
                     elif cx > self.box_x2:
                         direction = "E"
 
@@ -497,26 +455,15 @@ class TrafficApp:
                             self.count_w += 1
                         elif direction == "E":
                             self.count_e += 1
-                        
-                        # Terminate immediately post-count to prevent phantom counting of coasting ghosts
-                        obj["disappeared"] = 9999
 
-            # 7. Visualization
-            if obj["disappeared"] <= 2:
-                col = (0, 255, 0) if obj["counted"] else (0, 255, 255)
-                if obj["disappeared"] > 0:
-                    col = (0, 165, 255)  # Orange for coasting
-                    
-                dir_label = obj.get("direction") or ""
-                w, h = obj.get("size", (40, 40))
-                x = int(cx - w / 2)
-                y = int(cy - h / 2)
-                cv2.rectangle(frame, (x, y), (x + w, y + h), col, 2)
-                cv2.circle(frame, (int(cx), int(cy)), 4, (255, 80, 80), -1)
-                cv2.putText(frame, f"ID{mid}{dir_label}", (x, max(y - 8, 10)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 1)
+            col       = (0, 255, 0) if obj["counted"] else (0, 255, 255)
+            dir_label = obj.get("direction") or ""
+            cv2.rectangle(frame, (x, y), (x + w, y + h), col, 2)
+            cv2.circle(frame,    (cx, cy), 4, (255, 80, 80), -1)
+            cv2.putText(frame, f"ID{mid}{dir_label}", (x, max(y - 8, 10)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 1)
 
-        # 8. congestion: count objects that are waiting
+        # congestion: count objects that are waiting
         if self.mode == "sim" and hasattr(self, "inters_sim"):
             self.congestion = len(self.inters_sim._stop_queue)
         else:
@@ -530,7 +477,7 @@ class TrafficApp:
                 ) < 3.0
             )
 
-        # 9. remove lost objects
+        # remove lost objects
         gone = [oid for oid, o in self.objects.items()
                 if o["disappeared"] > MAX_GONE]
         for oid in gone:
@@ -605,19 +552,17 @@ class TrafficApp:
 
         # Fluid dynamic bounds tracking (Camera mode only)
         if self.mode == "cam":
-            # Because we sample sparsely (3 Hz), we apply a faster Lerp alpha adaptation speed
-            alpha = 0.4
             if valid_x:
                 lefts = [x for x in valid_x if x < FRAME_W / 2]
                 rights = [x for x in valid_x if x > FRAME_W / 2]
-                if lefts: self.box_x1 = int((1 - alpha) * self.box_x1 + alpha * np.median(lefts))
-                if rights: self.box_x2 = int((1 - alpha) * self.box_x2 + alpha * np.median(rights))
+                if lefts: self.box_x1 = int(0.9 * self.box_x1 + 0.1 * np.median(lefts))
+                if rights: self.box_x2 = int(0.9 * self.box_x2 + 0.1 * np.median(rights))
             
             if valid_y:
                 tops = [y for y in valid_y if y < FRAME_H / 2]
                 bottoms = [y for y in valid_y if y > FRAME_H / 2]
-                if tops: self.box_y1 = int((1 - alpha) * self.box_y1 + alpha * np.median(tops))
-                if bottoms: self.box_y2 = int((1 - alpha) * self.box_y2 + alpha * np.median(bottoms))
+                if tops: self.box_y1 = int(0.9 * self.box_y1 + 0.1 * np.median(tops))
+                if bottoms: self.box_y2 = int(0.9 * self.box_y2 + 0.1 * np.median(bottoms))
 
         return frame
 
@@ -647,50 +592,17 @@ class TrafficApp:
         return cv2.dilate(fg, KERNEL, iterations=2)
 
     # ── Tracker helpers ────────────────────────────────────────────────────────
-    def _register(self, cx, cy, w, h):
+    def _register(self, cx, cy):
         self.objects[self.next_id] = {
             "centroid":      (cx, cy),
             "prev_centroid": (cx, cy),
-            "predicted_centroid": (cx, cy),
-            "size":          (w, h),
             "direction":     None,
             "counted":       False,
-            "in_box":        False,
             "disappeared":   0,
             "age":           0,
             "last_seen":     time.time()
         }
         self.next_id += 1
-
-    def _send_periodic_report(self):
-        sev = "Low"
-        if self.congestion >= 4:
-            sev = "High"
-        elif self.congestion >= 2:
-            sev = "Medium"
-            
-        payload = {
-            "device_id": f"c920cam_{self.mode}",
-            "event": "periodic_report",
-            "total_count": self.count,
-            "north": self.count_n,
-            "south": self.count_s,
-            "west": self.count_w,
-            "east": self.count_e,
-            "congestion": self.congestion,
-            "severity": sev,
-            "timestamp": time.time()
-        }
-        print("POST 1-MIN REPORT:", payload)
-
-        def post_task():
-            try:
-                r = requests.post("http://127.0.0.1:5000/traffic", json=payload, timeout=2)
-                print("SERVER RESP:", r.status_code, r.text)
-            except Exception as e:
-                print("HTTP post failed:", e)
-                
-        threading.Thread(target=post_task, daemon=True).start()
 
     def _on_spawn_rate(self, val):
         if self.inters_sim:
