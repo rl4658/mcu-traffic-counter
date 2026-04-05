@@ -169,9 +169,10 @@ class TrafficApp:
         self.mode = mode
         self._reset_state()
 
-        # history=300 (~10s) balances ghost burn-in vs queued-car persistence.
+        # Increase history to 2000 so queued stop-sign cars don't vanish into the background.
+        # Disable shadow detection for purely binary silhouettes. 
         self.fgbg = cv2.createBackgroundSubtractorMOG2(
-            history=300, varThreshold=16, detectShadows=False)
+            history=2000, varThreshold=16, detectShadows=False)
 
         if mode == "cam":
             if platform.system() == "Linux":
@@ -376,9 +377,7 @@ class TrafficApp:
         min_area = 600 if self.mode == "sim" else 80
 
         if self.mode == "cam":
-            # Throttle HoughLines to every 10th frame — saves CPU on Pi, static camera doesn't need 30Hz
-            if self.frame_num % 10 == 1:
-                self._line_overlay(frame)
+            frame = self._line_overlay(frame)
 
         mask = self._motion_mask(frame)
 
