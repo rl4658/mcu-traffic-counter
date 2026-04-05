@@ -169,10 +169,12 @@ class TrafficApp:
         self.mode = mode
         self._reset_state()
 
-        # Increase history to 2000 so queued stop-sign cars don't vanish into the background.
-        # Disable shadow detection for purely binary silhouettes. 
+        # Sim uses absdiff so MOG2 history doesn't matter much; keep high.
+        # Camera: lower history to 500 (~17s) to reduce ghost burn-in at stop signs
+        # while still preserving queued cars for a reasonable duration.
+        hist = 500 if mode == "cam" else 2000
         self.fgbg = cv2.createBackgroundSubtractorMOG2(
-            history=2000, varThreshold=16, detectShadows=False)
+            history=hist, varThreshold=16, detectShadows=False)
 
         if mode == "cam":
             if platform.system() == "Linux":
@@ -380,9 +382,20 @@ class TrafficApp:
         min_area = 600 if self.mode == "sim" else 80
 
         if self.mode == "cam":
-            frame = self._line_overlay(frame)
+            # Throttle HoughLines to every 10th frame — saves CPU on Pi
+            if self.frame_num % 10 == 1:
+                self._line_overlay(frame)
 
         mask = self._motion_mask(frame)
+
+        # Camera warm-up: let MOG2 learn the static scene before detecting
+        if self.mode == "cam" and self.frame_num < 60:
+            x1, y1 = int(self.box_x1), int(self.box_y1)
+            x2, y2 = int(self.box_x2), int(self.box_y2)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
+            cv2.putText(frame, f"Calibrating... {60 - self.frame_num}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            return frame
 
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
                                         cv2.CHAIN_APPROX_SIMPLE)
