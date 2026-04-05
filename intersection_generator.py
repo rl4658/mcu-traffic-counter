@@ -387,10 +387,15 @@ class IntersectionSimulator:
     def next_frame(self):
         self._frame_idx += 1
         
-        self._spawn_timer += 1
-        if self._spawn_timer >= self._SPAWN_INTERVAL:
-            self._spawn_timer = 0
-            self._try_spawn()
+        # Determine the current frame within the loop cycle
+        cycle_frame = self._frame_idx % TOTAL_FRAMES
+        
+        # Stop spawning cars towards the end of the generator cycle so the video loop ends empty!
+        if cycle_frame < TOTAL_FRAMES - 450:
+            self._spawn_timer += 1
+            if self._spawn_timer >= self._SPAWN_INTERVAL:
+                self._spawn_timer = 0
+                self._try_spawn()
 
         # 1. Update stop queue for newly arriving cars
         for car in self._cars:

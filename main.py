@@ -390,7 +390,9 @@ class TrafficApp:
         min_area = 600 if self.mode == "sim" else 80
 
         if self.mode == "cam":
-            frame = self._line_overlay(frame)
+            # Throttle heavy HoughLines tracking to save CPU on Pi (3 Hz is plenty for static camera)
+            if self.frame_num % 10 == 1:
+                self._line_overlay(frame)
 
         mask = self._motion_mask(frame)
 
@@ -403,36 +405,58 @@ class TrafficApp:
             x, y, w, h = cv2.boundingRect(cnt)
             detections.append((x + w // 2, y + h // 2, x, y, w, h))
 
-        # age every existing object
+        # 1. Predict next centroids using constant velocity (for all objects)
         for obj in self.objects.values():
-            obj["disappeared"] += 1
+            vx = obj["centroid"][0] - obj["prev_centroid"][0]
+            vy = obj["centroid"][1] - obj["prev_centroid"][1]
+            obj["predicted_centroid"] = (obj["centroid"][0] + vx, obj["centroid"][1] + vy)
 
-        used_objs = set()
-        for cx, cy, x, y, w, h in detections:
-            mid = None
-            best = float("inf")
+        # 2. Match detections to objects based on PREDICTED positions
+        matches = []
+        for d_idx, (cx, cy, x, y, w, h) in enumerate(detections):
             for oid, obj in self.objects.items():
-                if oid in used_objs: continue
-                d = math.hypot(cx - obj["centroid"][0], cy - obj["centroid"][1])
-                if d < MATCH_DIST and d < best:
-                    best, mid = d, oid
+                px, py = obj["predicted_centroid"]
+                d = math.hypot(cx - px, cy - py)
+                matches.append((d, d_idx, oid))
+                
+        matches.sort(key=lambda x: x[0])
+        used_det = set()
+        used_obj = set()
+        
+        # 3. Apply matches
+        for d, d_idx, oid in matches:
+            if d > MATCH_DIST:
+                continue
+            if d_idx not in used_det and oid not in used_obj:
+                used_det.add(d_idx)
+                used_obj.add(oid)
+                # Update matched object
+                cx, cy, x, y, w, h = detections[d_idx]
+                obj = self.objects[oid]
+                obj["prev_centroid"] = obj["centroid"]
+                obj["centroid"]      = (cx, cy)
+                obj["size"]          = (w, h)
+                obj["disappeared"]   = 0
+                obj["age"]           += 1
+                obj["last_seen"]     = time.time()
+                
+        # 4. Handle unmatched detections (New objects)
+        for d_idx, (cx, cy, x, y, w, h) in enumerate(detections):
+            if d_idx not in used_det:
+                self._register(cx, cy, w, h)
+                
+        # 5. Handle unmatched objects (Coasting/Disappearing)
+        for oid, obj in self.objects.items():
+            if oid not in used_obj:
+                obj["disappeared"] += 1
+                obj["prev_centroid"] = obj["centroid"]
+                obj["centroid"] = obj["predicted_centroid"]
 
-            if mid is None:
-                self._register(cx, cy)
-                mid = self.next_id - 1
-            else:
-                self.objects[mid].update({
-                    "prev_centroid": self.objects[mid]["centroid"],
-                    "centroid":      (cx, cy),
-                    "disappeared":   0,
-                    "age":           self.objects[mid].get("age", 0) + 1,
-                    "last_seen":     time.time(),
-                })
-            used_objs.add(mid)
-
-            obj = self.objects[mid]
-            # Check physical presence in bounding box with a robust buffer margin
-            margin = 12
+        # 6. Check counting logic (Using a robust bounding box & buffer)
+        margin = 12
+        for mid, obj in self.objects.items():
+            cx, cy = obj["centroid"]
+            
             core_in_bounds = (self.box_x1 <= cx <= self.box_x2) and (self.box_y1 <= cy <= self.box_y2)
             buffer_in_bounds = (self.box_x1 - margin <= cx <= self.box_x2 + margin) and \
                                (self.box_y1 - margin <= cy <= self.box_y2 + margin)
@@ -443,16 +467,12 @@ class TrafficApp:
                 elif obj.get("in_box", False) and not buffer_in_bounds:
                     # Vehicle has definitively and cleanly exited the intersection boundaries
                     direction = None
-                    # Exits Top -> Going North
                     if cy < self.box_y1:
                         direction = "N"
-                    # Exits Bottom -> Going South
                     elif cy > self.box_y2:
                         direction = "S"
-                    # Exits Left -> Going West
                     elif cx < self.box_x1:
                         direction = "W"
-                    # Exits Right -> Going East
                     elif cx > self.box_x2:
                         direction = "E"
 
@@ -469,14 +489,22 @@ class TrafficApp:
                         elif direction == "E":
                             self.count_e += 1
 
-            col       = (0, 255, 0) if obj["counted"] else (0, 255, 255)
-            dir_label = obj.get("direction") or ""
-            cv2.rectangle(frame, (x, y), (x + w, y + h), col, 2)
-            cv2.circle(frame,    (cx, cy), 4, (255, 80, 80), -1)
-            cv2.putText(frame, f"ID{mid}{dir_label}", (x, max(y - 8, 10)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 1)
+            # 7. Visualization
+            if obj["disappeared"] <= 2:
+                col = (0, 255, 0) if obj["counted"] else (0, 255, 255)
+                if obj["disappeared"] > 0:
+                    col = (0, 165, 255)  # Orange for coasting
+                    
+                dir_label = obj.get("direction") or ""
+                w, h = obj.get("size", (40, 40))
+                x = int(cx - w / 2)
+                y = int(cy - h / 2)
+                cv2.rectangle(frame, (x, y), (x + w, y + h), col, 2)
+                cv2.circle(frame, (int(cx), int(cy)), 4, (255, 80, 80), -1)
+                cv2.putText(frame, f"ID{mid}{dir_label}", (x, max(y - 8, 10)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 1)
 
-        # congestion: count objects that are waiting
+        # 8. congestion: count objects that are waiting
         if self.mode == "sim" and hasattr(self, "inters_sim"):
             self.congestion = len(self.inters_sim._stop_queue)
         else:
@@ -490,7 +518,7 @@ class TrafficApp:
                 ) < 3.0
             )
 
-        # remove lost objects
+        # 9. remove lost objects
         gone = [oid for oid, o in self.objects.items()
                 if o["disappeared"] > MAX_GONE]
         for oid in gone:
@@ -565,17 +593,19 @@ class TrafficApp:
 
         # Fluid dynamic bounds tracking (Camera mode only)
         if self.mode == "cam":
+            # Because we sample sparsely (3 Hz), we apply a faster Lerp alpha adaptation speed
+            alpha = 0.4
             if valid_x:
                 lefts = [x for x in valid_x if x < FRAME_W / 2]
                 rights = [x for x in valid_x if x > FRAME_W / 2]
-                if lefts: self.box_x1 = int(0.9 * self.box_x1 + 0.1 * np.median(lefts))
-                if rights: self.box_x2 = int(0.9 * self.box_x2 + 0.1 * np.median(rights))
+                if lefts: self.box_x1 = int((1 - alpha) * self.box_x1 + alpha * np.median(lefts))
+                if rights: self.box_x2 = int((1 - alpha) * self.box_x2 + alpha * np.median(rights))
             
             if valid_y:
                 tops = [y for y in valid_y if y < FRAME_H / 2]
                 bottoms = [y for y in valid_y if y > FRAME_H / 2]
-                if tops: self.box_y1 = int(0.9 * self.box_y1 + 0.1 * np.median(tops))
-                if bottoms: self.box_y2 = int(0.9 * self.box_y2 + 0.1 * np.median(bottoms))
+                if tops: self.box_y1 = int((1 - alpha) * self.box_y1 + alpha * np.median(tops))
+                if bottoms: self.box_y2 = int((1 - alpha) * self.box_y2 + alpha * np.median(bottoms))
 
         return frame
 
@@ -605,12 +635,15 @@ class TrafficApp:
         return cv2.dilate(fg, KERNEL, iterations=2)
 
     # ── Tracker helpers ────────────────────────────────────────────────────────
-    def _register(self, cx, cy):
+    def _register(self, cx, cy, w, h):
         self.objects[self.next_id] = {
             "centroid":      (cx, cy),
             "prev_centroid": (cx, cy),
+            "predicted_centroid": (cx, cy),
+            "size":          (w, h),
             "direction":     None,
             "counted":       False,
+            "in_box":        False,
             "disappeared":   0,
             "age":           0,
             "last_seen":     time.time()
