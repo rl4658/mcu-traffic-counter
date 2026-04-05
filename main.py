@@ -175,10 +175,9 @@ class TrafficApp:
         self.mode = mode
         self._reset_state()
 
-        # Increase history to 2000 so queued stop-sign cars don't vanish into the background.
-        # Disable shadow detection for purely binary silhouettes. 
+        # Lower history to 90 (3 sec) to rapidly erase MOG2 ghost "burn-in" holes.
         self.fgbg = cv2.createBackgroundSubtractorMOG2(
-            history=2000, varThreshold=16, detectShadows=False)
+            history=90, varThreshold=16, detectShadows=False)
 
         if mode == "cam":
             if platform.system() == "Linux":
