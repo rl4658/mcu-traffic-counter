@@ -27,7 +27,7 @@ SEV_RED    = "#e74c3c"
 FRAME_W       = 640
 FRAME_H       = 480
 SIDEBAR_W     = 260
-MAX_GONE      = 12
+MAX_GONE      = 60
 MATCH_DIST    = 60
 LOW_THRESH    = 5
 MED_THRESH    = 15
@@ -387,12 +387,13 @@ class TrafficApp:
         
         # The iPad camera's distance causes nested cars to naturally compress visually down to ~150-200px.
         # Dropped min_area for camera mode down drastically to ensure these nested vehicles pass the contour check!
-        min_area = 600 if self.mode == "sim" else 80
+        min_area = 600 if self.mode == "sim" else 50
 
         if self.mode == "cam":
             # Throttle heavy HoughLines tracking to save CPU on Pi (3 Hz is plenty for static camera)
             if self.frame_num % 10 == 1:
-                self._line_overlay(frame)
+                bg = self.fgbg.getBackgroundImage()
+                self._line_overlay(bg if bg is not None else frame)
 
         mask = self._motion_mask(frame)
 
@@ -413,8 +414,17 @@ class TrafficApp:
 
         # 2. Match detections to objects based on PREDICTED positions
         matches = []
+        margin = 12
         for d_idx, (cx, cy, x, y, w, h) in enumerate(detections):
+            # Is this active visual contour physically inside the intersection zone?
+            det_in_buffer = (self.box_x1 - margin <= cx <= self.box_x2 + margin) and \
+                            (self.box_y1 - margin <= cy <= self.box_y2 + margin)
+                            
             for oid, obj in self.objects.items():
+                # BUGFIX: Prevent trailing cars from stealing an exited (Green) car's ID 
+                if obj["counted"] and det_in_buffer:
+                    continue
+                    
                 px, py = obj["predicted_centroid"]
                 d = math.hypot(cx - px, cy - py)
                 matches.append((d, d_idx, oid))

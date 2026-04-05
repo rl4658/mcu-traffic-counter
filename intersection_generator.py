@@ -25,11 +25,11 @@ LOOKAHEAD = 8
 STEP_PX = 4
 
 CAR_COLORS = [
-    (0, 215, 255),
-    (90, 220, 90),
-    (255, 180, 80),
-    (180, 140, 255),
-    (80, 180, 255),
+    (0, 140, 255),   # Deep Orange
+    (0, 165, 255),   # Classic Orange
+    (0, 120, 255),   # Rust Orange
+    (0, 150, 255),   # Bright Orange
+    (0, 180, 255),   # Light Orange
 ]
 
 def dist(p1, p2):
