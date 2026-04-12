@@ -305,7 +305,7 @@ DASHBOARD_HTML = """
             // Update Top Stats
             const latest = data[data.length - 1];
             document.getElementById('globalTotal').innerText = latest.total_count;
-            document.getElementById('globalCongestion').innerText = latest.congestion;
+            document.getElementById('globalCongestion').innerText = latest.severity;
             
             // Re-render list if data size changed
             if (data.length !== currentDataLength) {
