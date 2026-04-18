@@ -255,7 +255,7 @@ DASHBOARD_HTML = """
         </div>
         <div class="stat-card">
             <div class="stat-title">Current Congestion</div>
-            <div class="stat-value" id="globalCongestion">0</div>
+            <div class="stat-value" id="globalCongestion">--</div>
         </div>
         <div class="stat-card">
             <div class="stat-title">Sensors Active</div>
